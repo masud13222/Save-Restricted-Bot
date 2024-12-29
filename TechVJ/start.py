@@ -8,13 +8,24 @@ import pyrogram
 from pyrogram import Client, filters, enums
 from pyrogram.errors import FloodWait, UserIsBlocked, InputUserDeactivated, UserAlreadyParticipant, InviteHashExpired, UsernameNotOccupied
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message 
-from config import API_ID, API_HASH, ERROR_MESSAGE, VERIFICATION_DURATION, ADMINS
+from config import API_ID, API_HASH, ERROR_MESSAGE, VERIFICATION_DURATION, ADMIN_IDS
 from database.db import db
 from TechVJ.strings import HELP_TXT
-import time
+from datetime import datetime, timedelta
 
 class batch_temp(object):
     IS_BATCH = {}
+
+# Dictionary to store user verification timestamps
+user_verification = {}
+
+async def is_user_verified(user_id):
+    if user_id in ADMIN_IDS:
+        return True
+    last_verified = user_verification.get(user_id)
+    if last_verified and datetime.now() < last_verified + timedelta(seconds=VERIFICATION_DURATION):
+        return True
+    return False
 
 async def downstatus(client, statusfile, message, chat):
     while True:
@@ -56,48 +67,24 @@ def progress(current, total, message, type):
         fileup.write(f"{current * 100 / total:.1f}%")
 
 
-# Dictionary to store user verification status
-user_verification = {}
-
 # start command
 @Client.on_message(filters.command(["start"]))
 async def send_start(client: Client, message: Message):
-    user_id = message.from_user.id
-
-    # Check if user is admin
-    if user_id in ADMINS:
-        await send_welcome_message(client, message)
-        return
-
-    # Check if user is verified
-    if user_id in user_verification:
-        if time.time() - user_verification[user_id] < VERIFICATION_DURATION:
-            await send_welcome_message(client, message)
-            return
-        else:
-            del user_verification[user_id]  # Remove expired verification
-
-    # Send verification link
-    verify_button = InlineKeyboardButton("Verify", url="https://t.me/your_verification_bot")
-    reply_markup = InlineKeyboardMarkup([[verify_button]])
-    await client.send_message(
-        chat_id=message.chat.id,
-        text="Please verify yourself by clicking the button below.",
-        reply_markup=reply_markup
-    )
-
-@Client.on_message(filters.command(["verify"]))
-async def verify_user(client: Client, message: Message):
-    user_id = message.from_user.id
-    user_verification[user_id] = time.time()
-    await client.send_message(
-        chat_id=message.chat.id,
-        text="You have been verified! You can now use the bot for the next 6 hours."
-    )
-
-async def send_welcome_message(client: Client, message: Message):
     if not await db.is_user_exist(message.from_user.id):
         await db.add_user(message.from_user.id, message.from_user.first_name)
+    
+    if not await is_user_verified(message.from_user.id):
+        verify_button = InlineKeyboardButton("Verify", url="https://t.me/your_verification_bot")
+        buttons = [[verify_button]]
+        reply_markup = InlineKeyboardMarkup(buttons)
+        await client.send_message(
+            chat_id=message.chat.id,
+            text="Please verify yourself by clicking the button below to use the bot.",
+            reply_markup=reply_markup,
+            reply_to_message_id=message.id
+        )
+        return
+
     buttons = [[
         InlineKeyboardButton("❣️ Developer", url = "https://t.me/kingvj01")
     ],[
@@ -133,6 +120,9 @@ async def send_cancel(client: Client, message: Message):
 
 @Client.on_message(filters.text & filters.private)
 async def save(client: Client, message: Message):
+    if not await is_user_verified(message.from_user.id):
+        return await message.reply_text("Please verify yourself by clicking the button in the /start command to use the bot.")
+
     if "https://t.me/" in message.text:
         if batch_temp.IS_BATCH.get(message.from_user.id) == False:
             return await message.reply_text("**One Task Is Already Processing. Wait For Complete It. If You Want To Cancel This Task Then Use - /cancel**")
